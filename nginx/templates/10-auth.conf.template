@@ -1,0 +1,13 @@
+# The IdP itself - not behind its own forward auth.
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name auth.${DOMAIN};
+
+    include /etc/nginx/snippets/tls.conf;
+
+    location / {
+        proxy_pass http://authentik-server:9000;
+        include /etc/nginx/snippets/proxy.conf;
+    }
+}

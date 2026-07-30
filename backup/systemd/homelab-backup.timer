@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the homelab backup daily
+
+[Timer]
+# Mon-Sat; Sunday is covered by homelab-backup-check.timer.
+OnCalendar=Mon..Sat *-*-* 03:00:00
+RandomizedDelaySec=15m
+# Runs a missed backup at the next boot instead of skipping the day.
+Persistent=true
+Unit=homelab-backup.service
+
+[Install]
+WantedBy=timers.target

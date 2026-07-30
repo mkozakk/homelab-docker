@@ -1,0 +1,15 @@
+# Panel only; DNS on :53 goes straight to the container.
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name dns.${DOMAIN};
+
+    include /etc/nginx/snippets/tls.conf;
+    include /etc/nginx/snippets/authentik-location.conf;
+
+    location / {
+        include /etc/nginx/snippets/authentik-authrequest.conf;
+        proxy_pass http://adguard:3000;
+        include /etc/nginx/snippets/proxy.conf;
+    }
+}

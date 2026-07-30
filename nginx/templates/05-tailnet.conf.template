@@ -1,0 +1,30 @@
+# Landing page for `tailscale serve`, which terminates TLS and forwards plain
+# HTTP. Must stay on port 80 and match by name, ahead of the default 80->443
+# redirect - otherwise: browser -> ts serve -> nginx:80 -> 301 -> loop.
+server {
+    listen 80;
+    server_name ${TS_HOSTNAME_FQDN};
+
+    location / {
+        default_type text/html;
+        return 200 "<!doctype html>
+<meta charset=utf-8>
+<title>homelab</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:36rem;margin:12vh auto;padding:0 1.5rem;background:#111;color:#eee}
+h1{font-size:1.4rem;font-weight:600;letter-spacing:-.01em}
+a{display:block;padding:.6rem .9rem;margin:.4rem 0;border:1px solid #333;border-radius:.5rem;color:#7dd3fc;text-decoration:none}
+a:hover{background:#1a1a1a;border-color:#555}
+small{color:#888}
+</style>
+<h1>homelab</h1>
+<a href=\"https://grafana.${DOMAIN}\">Grafana <small>&mdash; metrics and dashboards</small></a>
+<a href=\"https://prometheus.${DOMAIN}\">Prometheus <small>&mdash; raw metrics</small></a>
+<a href=\"https://auth.${DOMAIN}\">authentik <small>&mdash; accounts and SSO</small></a>
+<a href=\"https://cloud.${DOMAIN}\">Nextcloud <small>&mdash; files</small></a>
+<a href=\"https://chat.${DOMAIN}\">Open WebUI <small>&mdash; LLM on the GPU</small></a>
+<a href=\"https://dns.${DOMAIN}\">AdGuard Home <small>&mdash; DNS</small></a>
+<p><small>These links work when the client resolves *.${DOMAIN} through AdGuard.</small></p>
+";
+    }
+}

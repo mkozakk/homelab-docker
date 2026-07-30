@@ -1,0 +1,22 @@
+[Unit]
+Description=homelab backup (restic)
+Documentation=file:/opt/homelab/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust both paths if the stack lives elsewhere.
+WorkingDirectory=/opt/homelab
+ExecStart=/opt/homelab/backup/backup.sh
+
+TimeoutStartSec=6h
+Nice=10
+IOSchedulingClass=idle
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-backup
+
+[Install]
+WantedBy=multi-user.target

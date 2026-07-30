@@ -1,0 +1,14 @@
+.env
+*.env
+!.env.example
+
+nginx/certs/*.crt
+nginx/certs/*.key
+nginx/certs/*.pem
+
+backup/restored/
+
+docker-compose.override.yml
+compose.override.yml
+
+*.log

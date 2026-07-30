@@ -1,0 +1,16 @@
+[Unit]
+Description=homelab backup with repository integrity check (restic)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/homelab
+ExecStart=/opt/homelab/backup/backup.sh --check
+TimeoutStartSec=12h
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-backup
+
+[Install]
+WantedBy=multi-user.target

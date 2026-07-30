@@ -1,0 +1,22 @@
+# No forward auth: sync/WebDAV clients cannot pass it.
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name cloud.${DOMAIN};
+
+    include /etc/nginx/snippets/tls.conf;
+
+    location = /.well-known/carddav { return 301 /remote.php/dav; }
+    location = /.well-known/caldav  { return 301 /remote.php/dav; }
+    location = /.well-known/webfinger  { return 301 /index.php/.well-known/webfinger; }
+    location = /.well-known/nodeinfo   { return 301 /index.php/.well-known/nodeinfo; }
+
+    location / {
+        proxy_pass http://nextcloud:80;
+        include /etc/nginx/snippets/proxy.conf;
+
+        proxy_request_buffering off;
+        proxy_buffering         off;
+        proxy_max_temp_file_size 0;
+    }
+}

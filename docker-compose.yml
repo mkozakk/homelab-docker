@@ -1,0 +1,385 @@
+name: homelab
+
+networks:
+  dmz:
+    name: homelab-dmz
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.10.0/24
+  private:
+    name: homelab-private
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.20.0/24
+  backend:
+    name: homelab-backend
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.30.0/24
+
+volumes:
+  tailscale-state:
+  adguard-work:
+  adguard-conf:
+  prometheus-data:
+  grafana-data:
+  authentik-media:
+  authentik-templates:
+  authentik-db:
+  authentik-redis:
+  nextcloud-app:
+  nextcloud-data:
+  nextcloud-db:
+  nextcloud-redis:
+  ollama-models:
+  openwebui-data:
+
+x-common: &common
+  restart: unless-stopped
+  environment:
+    TZ: ${TZ:-Europe/Warsaw}
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  tailscale:
+    <<: *common
+    image: tailscale/tailscale:${TAILSCALE_TAG:-stable}
+    container_name: ts-gateway
+    hostname: ${TS_HOSTNAME:-homelab}
+    environment:
+      TZ: ${TZ:-Europe/Warsaw}
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "false"
+      TS_ROUTES: ${TS_ROUTES:-172.28.10.0/24}
+      TS_EXTRA_ARGS: --accept-dns=false ${TS_EXTRA_ARGS:-}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale/serve.json:/config/serve.json:ro,z
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    networks:
+      - dmz
+
+  nginx:
+    <<: *common
+    image: nginx:${NGINX_TAG:-1.27-alpine}
+    container_name: nginx
+    environment:
+      TZ: ${TZ:-Europe/Warsaw}
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      TS_HOSTNAME_FQDN: ${TS_HOSTNAME_FQDN:-homelab.example.ts.net}
+      NGINX_ENVSUBST_FILTER: "^(DOMAIN|TS_HOSTNAME_FQDN)$$"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro,z
+      - ./nginx/templates:/etc/nginx/templates:ro,z
+      - ./nginx/snippets:/etc/nginx/snippets:ro,z
+      - ./nginx/certs:/etc/nginx/certs:ro,z
+    networks:
+      - dmz
+      - private
+    depends_on:
+      - grafana
+      - authentik-server
+      - nextcloud
+      - open-webui
+      - adguard
+      - prometheus
+
+  adguard:
+    <<: *common
+    image: adguard/adguardhome:${ADGUARD_TAG:-latest}
+    container_name: adguard
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "127.0.0.1:3000:3000/tcp"
+    volumes:
+      - adguard-work:/opt/adguardhome/work
+      - adguard-conf:/opt/adguardhome/conf
+    networks:
+      - dmz
+
+  prometheus:
+    <<: *common
+    image: prom/prometheus:${PROMETHEUS_TAG:-latest}
+    container_name: prometheus
+    user: "65534:65534"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROM_RETENTION:-30d}
+      - --web.external-url=https://prometheus.${DOMAIN}
+      - --web.route-prefix=/
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
+      - prometheus-data:/prometheus
+    networks:
+      - private
+
+  node-exporter:
+    <<: *common
+    image: prom/node-exporter:${NODE_EXPORTER_TAG:-latest}
+    container_name: node-exporter
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/(docker|containers)/.+)($$|/)
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+    networks:
+      - private
+
+  grafana:
+    <<: *common
+    image: grafana/grafana-oss:${GRAFANA_TAG:-latest}
+    container_name: grafana
+    environment:
+      TZ: ${TZ:-Europe/Warsaw}
+      GF_SERVER_ROOT_URL: https://grafana.${DOMAIN}
+      GF_SERVER_ENABLE_GZIP: "true"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_AUTH_GENERIC_OAUTH_ENABLED: ${GRAFANA_OIDC_ENABLED:-false}
+      GF_AUTH_GENERIC_OAUTH_NAME: authentik
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: ${GRAFANA_OIDC_CLIENT_ID:-}
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${GRAFANA_OIDC_CLIENT_SECRET:-}
+      GF_AUTH_GENERIC_OAUTH_SCOPES: "openid email profile"
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: https://auth.${DOMAIN}/application/o/authorize/
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: https://auth.${DOMAIN}/application/o/token/
+      GF_AUTH_GENERIC_OAUTH_API_URL: https://auth.${DOMAIN}/application/o/userinfo/
+      GF_AUTH_SIGNOUT_REDIRECT_URL: https://auth.${DOMAIN}/application/o/grafana/end-session/
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro,z
+    networks:
+      - private
+    depends_on:
+      - prometheus
+
+  authentik-db:
+    <<: *common
+    image: docker.io/library/postgres:${POSTGRES_TAG:-16-alpine}
+    container_name: authentik-db
+    environment:
+      TZ: ${TZ:-Europe/Warsaw}
+      POSTGRES_DB: authentik
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD: ${AUTHENTIK_DB_PASSWORD:?set AUTHENTIK_DB_PASSWORD}
+    volumes:
+      - authentik-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik -d authentik"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+
+  authentik-redis:
+    <<: *common
+    image: docker.io/library/redis:${REDIS_TAG:-7-alpine}
+    container_name: authentik-redis
+    command: --save 60 1 --loglevel warning
+    volumes:
+      - authentik-redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - backend
+
+  authentik-server:
+    <<: *common
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG:-latest}
+    container_name: authentik-server
+    command: server
+    environment: &authentik-env
+      TZ: ${TZ:-Europe/Warsaw}
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_POSTGRESQL__HOST: authentik-db
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_DB_PASSWORD}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?set AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+      AUTHENTIK_EMAIL__HOST: ${SMTP_HOST:-}
+      AUTHENTIK_EMAIL__PORT: ${SMTP_PORT:-587}
+      AUTHENTIK_EMAIL__USERNAME: ${SMTP_USER:-}
+      AUTHENTIK_EMAIL__PASSWORD: ${SMTP_PASSWORD:-}
+      AUTHENTIK_EMAIL__FROM: ${SMTP_FROM:-authentik@localhost}
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+    networks:
+      - private
+      - backend
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+      authentik-redis:
+        condition: service_healthy
+
+  authentik-worker:
+    <<: *common
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG:-latest}
+    container_name: authentik-worker
+    command: worker
+    environment: *authentik-env
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+    networks:
+      - private
+      - backend
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+      authentik-redis:
+        condition: service_healthy
+
+  nextcloud-db:
+    <<: *common
+    image: docker.io/library/mariadb:${MARIADB_TAG:-11}
+    container_name: nextcloud-db
+    command: >-
+      --transaction-isolation=READ-COMMITTED
+      --log-bin=binlog
+      --binlog-format=ROW
+    environment:
+      TZ: ${TZ:-Europe/Warsaw}
+      MARIADB_ROOT_PASSWORD: ${NEXTCLOUD_DB_ROOT_PASSWORD:?set NEXTCLOUD_DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: nextcloud
+      MARIADB_USER: nextcloud
+      MARIADB_PASSWORD: ${NEXTCLOUD_DB_PASSWORD:?set NEXTCLOUD_DB_PASSWORD}
+      MARIADB_AUTO_UPGRADE: "1"
+    volumes:
+      - nextcloud-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+
+  nextcloud-redis:
+    <<: *common
+    image: docker.io/library/redis:${REDIS_TAG:-7-alpine}
+    container_name: nextcloud-redis
+    command: --save 60 1 --loglevel warning
+    volumes:
+      - nextcloud-redis:/data
+    networks:
+      - backend
+
+  nextcloud:
+    <<: *common
+    image: docker.io/library/nextcloud:${NEXTCLOUD_TAG:-stable-apache}
+    container_name: nextcloud
+    environment:
+      TZ: ${TZ:-Europe/Warsaw}
+      MYSQL_HOST: nextcloud-db
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${NEXTCLOUD_DB_PASSWORD}
+      REDIS_HOST: nextcloud-redis
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:-admin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:?set NEXTCLOUD_ADMIN_PASSWORD}
+      NEXTCLOUD_TRUSTED_DOMAINS: cloud.${DOMAIN}
+      TRUSTED_PROXIES: 172.28.20.0/24
+      OVERWRITEHOST: cloud.${DOMAIN}
+      OVERWRITEPROTOCOL: https
+      OVERWRITECLIURL: https://cloud.${DOMAIN}
+      PHP_MEMORY_LIMIT: 1G
+      PHP_UPLOAD_LIMIT: 10G
+    volumes:
+      - nextcloud-app:/var/www/html
+      - nextcloud-data:/var/www/html/data
+    networks:
+      - private
+      - backend
+    depends_on:
+      nextcloud-db:
+        condition: service_healthy
+
+  nextcloud-cron:
+    <<: *common
+    image: docker.io/library/nextcloud:${NEXTCLOUD_TAG:-stable-apache}
+    container_name: nextcloud-cron
+    entrypoint: /cron.sh
+    volumes:
+      - nextcloud-app:/var/www/html
+      - nextcloud-data:/var/www/html/data
+    networks:
+      - backend
+    depends_on:
+      nextcloud-db:
+        condition: service_healthy
+
+  ollama:
+    <<: *common
+    image: docker.io/ollama/ollama:${OLLAMA_TAG:-latest}
+    container_name: ollama
+    environment:
+      TZ: ${TZ:-Europe/Warsaw}
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-8192}
+    volumes:
+      - ollama-models:/root/.ollama
+    networks:
+      - private
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  open-webui:
+    <<: *common
+    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_TAG:-main}
+    container_name: open-webui
+    environment:
+      TZ: ${TZ:-Europe/Warsaw}
+      OLLAMA_BASE_URL: http://ollama:11434
+      WEBUI_URL: https://chat.${DOMAIN}
+      WEBUI_SECRET_KEY: ${OPEN_WEBUI_SECRET_KEY:?set OPEN_WEBUI_SECRET_KEY}
+      ENABLE_SIGNUP: "false"
+      WEBUI_AUTH_TRUSTED_EMAIL_HEADER: ${OPEN_WEBUI_TRUSTED_EMAIL_HEADER:-}
+      WEBUI_AUTH_TRUSTED_NAME_HEADER: ${OPEN_WEBUI_TRUSTED_NAME_HEADER:-}
+    volumes:
+      - openwebui-data:/app/backend/data
+    networks:
+      - private
+    depends_on:
+      - ollama

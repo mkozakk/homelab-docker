@@ -1,0 +1,13 @@
+# No forward auth: Grafana has its own login, this would just double it.
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name grafana.${DOMAIN};
+
+    include /etc/nginx/snippets/tls.conf;
+
+    location / {
+        proxy_pass http://grafana:3000;
+        include /etc/nginx/snippets/proxy.conf;
+    }
+}

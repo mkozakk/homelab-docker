@@ -1,0 +1,30 @@
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name chat.${DOMAIN};
+
+    include /etc/nginx/snippets/tls.conf;
+    include /etc/nginx/snippets/authentik-location.conf;
+
+    location / {
+        # For SSO: uncomment below, THEN set OPEN_WEBUI_TRUSTED_EMAIL_HEADER
+        # in .env. That order matters - otherwise the header can be forged.
+        # include /etc/nginx/snippets/authentik-authrequest.conf;
+
+        proxy_pass http://open-webui:8080;
+        include /etc/nginx/snippets/proxy.conf;
+
+        # Token streaming; the 600s read timeout comes from proxy.conf.
+        proxy_buffering  off;
+        proxy_cache      off;
+    }
+
+    # Raw ollama API - forward auth is the only thing guarding it.
+    location /ollama/ {
+        include /etc/nginx/snippets/authentik-authrequest.conf;
+
+        proxy_pass http://ollama:11434/;
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_buffering off;
+    }
+}
